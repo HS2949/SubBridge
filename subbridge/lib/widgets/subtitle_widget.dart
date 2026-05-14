@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import '../services/subtitle_settings.dart';
 
 class SubtitleWidget extends StatefulWidget {
   const SubtitleWidget({super.key});
@@ -11,29 +12,71 @@ class SubtitleWidget extends StatefulWidget {
 class _SubtitleWidgetState extends State<SubtitleWidget>
     with SingleTickerProviderStateMixin {
   String _subtitle = '';
-  late AnimationController _fadeController;
+  late AnimationController _fade;
   late Animation<double> _fadeAnim;
+
+  // 설정 기본값 (HomeScreen이 보내기 전 표시될 값)
+  double _opacity = 0.80;
+  double _fontSize = 18.0;
+  Color _textColor = Colors.white;
+  Color _bgColor = Colors.black;
 
   @override
   void initState() {
     super.initState();
-    _fadeController = AnimationController(
+    _fade = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
-    _fadeAnim = CurvedAnimation(parent: _fadeController, curve: Curves.easeIn);
+    _fadeAnim = CurvedAnimation(parent: _fade, curve: Curves.easeIn);
+
+    _loadSavedSettings();
 
     FlutterOverlayWindow.overlayListener.listen((data) {
-      if (data != null && data.toString().isNotEmpty) {
-        setState(() => _subtitle = data.toString());
-        _fadeController.forward(from: 0);
+      if (data == null) return;
+
+      if (data is String) {
+        // 자막 텍스트
+        setState(() => _subtitle = data);
+        _fade.forward(from: 0);
+      } else if (data is Map) {
+        // 설정 업데이트 패킷
+        _applySettings(Map<String, dynamic>.from(data));
+      }
+    });
+  }
+
+  Future<void> _loadSavedSettings() async {
+    final svc = SubtitleSettingsService();
+    await svc.load();
+    final s = svc.settings;
+    if (mounted) {
+      setState(() {
+        _opacity = s.opacity;
+        _fontSize = s.fontSize;
+        _textColor = s.textColor;
+        _bgColor = s.bgColor;
+      });
+    }
+  }
+
+  void _applySettings(Map<String, dynamic> map) {
+    if (map['type'] != 'settings') return;
+    setState(() {
+      _opacity = (map['opacity'] as num?)?.toDouble() ?? _opacity;
+      _fontSize = (map['fontSize'] as num?)?.toDouble() ?? _fontSize;
+      if (map['textColor'] != null) {
+        _textColor = Color(map['textColor'] as int);
+      }
+      if (map['bgColor'] != null) {
+        _bgColor = Color(map['bgColor'] as int);
       }
     });
   }
 
   @override
   void dispose() {
-    _fadeController.dispose();
+    _fade.dispose();
     super.dispose();
   }
 
@@ -50,19 +93,19 @@ class _SubtitleWidgetState extends State<SubtitleWidget>
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.80),
+            color: _bgColor.withValues(alpha: _opacity),
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.white24),
+            border: Border.all(color: Colors.white12),
           ),
           child: Text(
             _subtitle,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 17,
+            style: TextStyle(
+              color: _textColor,
+              fontSize: _fontSize,
               fontWeight: FontWeight.w500,
               height: 1.4,
-              shadows: [
+              shadows: const [
                 Shadow(blurRadius: 4, color: Colors.black, offset: Offset(0, 1)),
               ],
             ),

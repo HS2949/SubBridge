@@ -15,7 +15,6 @@ class MainActivity : FlutterActivity() {
         const val MEDIA_PROJECTION_REQUEST = 1001
         const val METHOD_CHANNEL = "com.subbridge/audio_capture"
         const val SUBTITLE_EVENT = "com.subbridge/subtitle_stream"
-        const val STATUS_EVENT = "com.subbridge/status_stream"
     }
 
     private var pendingResult: MethodChannel.Result? = null
@@ -32,8 +31,13 @@ class MainActivity : FlutterActivity() {
                     }
                     "stopCapture" -> {
                         stopService(Intent(this, AudioCaptureService::class.java))
+                        AudioCaptureService.lastStatus = "중지됨"
+                        AudioCaptureService.downloadProgress = -1
                         result.success(null)
                     }
+                    // Flutter 폴링용 — EventChannel 타이밍 문제 없이 항상 최신 상태 반환
+                    "getStatus" -> result.success(AudioCaptureService.lastStatus)
+                    "getDownloadProgress" -> result.success(AudioCaptureService.downloadProgress)
                     else -> result.notImplemented()
                 }
             }
@@ -46,17 +50,6 @@ class MainActivity : FlutterActivity() {
                 }
                 override fun onCancel(arguments: Any?) {
                     AudioCaptureService.subtitleSink = null
-                }
-            })
-
-        // 상태 EventChannel: 모델 로딩 등 상태 업데이트
-        EventChannel(flutterEngine.dartExecutor.binaryMessenger, STATUS_EVENT)
-            .setStreamHandler(object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
-                    AudioCaptureService.statusSink = sink
-                }
-                override fun onCancel(arguments: Any?) {
-                    AudioCaptureService.statusSink = null
                 }
             })
     }

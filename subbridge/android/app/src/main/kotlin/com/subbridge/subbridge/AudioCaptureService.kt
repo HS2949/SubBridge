@@ -40,12 +40,14 @@ class AudioCaptureService : Service() {
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_DATA = "data"
         const val MODEL_DIR_NAME = "vosk-model-small-ja-0.22"
-        // AlphaModel 소형 일본어 모델 다운로드 URL
         const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip"
 
-        // Flutter EventChannel 싱크 (MainActivity에서 연결)
+        // Flutter EventChannel 싱크 (자막 전달용)
         @Volatile var subtitleSink: EventChannel.EventSink? = null
-        @Volatile var statusSink: EventChannel.EventSink? = null
+
+        // MethodChannel 폴링용 상태 저장 (EventChannel 타이밍 문제 우회)
+        @Volatile var lastStatus: String = "대기 중"
+        @Volatile var downloadProgress: Int = -1   // -1: 없음, 0~100: 진행 중
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -114,13 +116,39 @@ class AudioCaptureService : Service() {
         withContext(Dispatchers.IO) {
             try {
                 val zipFile = File(cacheDir, "vosk-model-ja.zip")
-                // 다운로드
+
+                // ── 다운로드 (진행률 추적) ──────────────────────────
                 val conn = URL(MODEL_URL).openConnection() as HttpURLConnection
+                conn.connectTimeout = 30_000
+                conn.readTimeout = 60_000
                 conn.connect()
-                conn.inputStream.use { input ->
-                    zipFile.outputStream().use { out -> input.copyTo(out) }
+                val totalBytes = conn.contentLength.toLong()   // -1이면 알 수 없음
+                var downloaded = 0L
+                var lastReported = -1
+
+                zipFile.outputStream().use { out ->
+                    conn.inputStream.use { input ->
+                        val buf = ByteArray(8192)
+                        var read = input.read(buf)
+                        while (read > 0) {
+                            out.write(buf, 0, read)
+                            downloaded += read
+                            if (totalBytes > 0) {
+                                val pct = (downloaded * 100 / totalBytes).toInt()
+                                if (pct != lastReported) {
+                                    lastReported = pct
+                                    downloadProgress = pct
+                                    emitStatus("모델 다운로드 중... $pct%")
+                                }
+                            }
+                            read = input.read(buf)
+                        }
+                    }
                 }
-                // 압축 해제
+                downloadProgress = -1
+
+                // ── 압축 해제 ───────────────────────────────────────
+                emitStatus("모델 압축 해제 중...")
                 java.util.zip.ZipInputStream(zipFile.inputStream()).use { zip ->
                     var entry = zip.nextEntry
                     while (entry != null) {
@@ -139,6 +167,7 @@ class AudioCaptureService : Service() {
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Model download failed", e)
+                downloadProgress = -1
                 false
             }
         }
@@ -278,9 +307,13 @@ class AudioCaptureService : Service() {
         mainHandler.post { subtitleSink?.success(text) }
     }
 
+    // EventChannel 대신 companion object에 저장 → MethodChannel 폴링으로 Flutter에 전달
     private fun emitStatus(msg: String) {
         Log.d(TAG, msg)
-        mainHandler.post { statusSink?.success(msg) }
+        lastStatus = msg
+        // 알림 텍스트도 업데이트
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, buildNotification(msg))
     }
 
     // ──────────────────────────────────────────────
@@ -298,10 +331,10 @@ class AudioCaptureService : Service() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(statusText: String = "일본어 오디오를 실시간으로 번역합니다"): Notification {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("SubBridge 실행 중")
-            .setContentText("일본어 오디오를 실시간으로 번역합니다")
+            .setContentText(statusText)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setOngoing(true)
             .build()
